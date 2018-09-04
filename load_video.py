@@ -244,7 +244,7 @@ def pipeline(image):
     global framed_gps
     if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
         framed_gps.append(framed_gps[-1])
-    fn="images/" + trip_id + str(analyze_fn) + ".jpg"
+    fn="images/" + trip_id + "/{num:05}.jpg".format(num=analyze_fn)
     mpimg.imsave(fn,img_dst)
     framed_gps[analyze_fn]['image'] = fn
     framed_gps[analyze_fn]['judge'] = analyze_judge
@@ -298,14 +298,24 @@ start_time = detail.val()['start']
 framed_gps = make_frame_gps(gps_db, clip1, start_time)
 
 # analyze road lane
-if not os.path.isdir('images'):
-    os.mkdir('images')
+#if not os.path.isdir('images'):
+#    os.mkdir('images')
+image_dir = 'images/' + trip_id + '/'
+try:
+    os.makedirs(image_dir)
+except FileExistsError:
+    print('image directory is already existed. exit.')
+    exit(-1)
 analyze_fn = 0
 white_clip = clip1.fl_image(pipeline)
 
 ## TODO: Update Database using framed_gps
 #  framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
+db.child('analyzed').push(framed_gps)
 ## TODO: Upload images to storage/images
-#  storage/images/%tid%[0-fn].jpg
+#  storage/images/%tid%/[00000-000fn].jpg
+image_list = os.listdir(image_dir)
+for imfile in image_list:
+    storage.child(image_dir + imfile).put(image_dir + imfile)
 
 #white_clip.write_videofile(output_video, audio=False)
