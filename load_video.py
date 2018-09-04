@@ -1,10 +1,63 @@
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+import pyrebase
 import numpy as np
 import cv2
 import math
 
-savefile_num=0
+### global values
+analyze_fn = 0
+trip_id    = ""
+
+### functions
+# gps dbから位置情報配列を取得
+def get_location(gps_db, key_idx):
+    t = key_idx
+    x = float(gps_db.val()[str(t)]["longitude"])
+    y = float(gps_db.val()[str(t)]["latitude"])
+    z = float(gps_db.val()[str(t)]["altitude"])
+    return [t, x, y, z]
+
+# Movie frame に対応したGPSリストの生成
+def make_frame_gps(gps_db, clip, start):
+    # 辞書のキーを配列に
+    key_list=[]
+    for key in gps_db.val().keys():
+        key_list.append(int(key))
+
+    # startに一番近いキーを探す (startの次)　https://qiita.com/icchi_h/items/fc0df3abb02b51f81657
+    s_idx = np.abs(np.asarray(key_list) - start).argmin()
+    if start > key_list[s_idx]:
+        s_idx += 1
+        
+    # DBの中身
+    gps_db.val()[str(key_list[s_idx])]
+    #gps_db.val()[str(key_list[e_idx])]
+
+    # 線形補完
+    fps       = clip.fps  # get fps from movie file
+    d_frame   = 1000/fps  # 1 frame time in ms
+    fn0       = 0
+    gps_frame = []
+
+    idx    = s_idx
+    d_time = key_list[idx+1] - key_list[idx] # duration time between gps breadcrumbs
+    loc1   = get_location(gps_db, key_list[idx])
+    loc2   = get_location(gps_db, key_list[idx+1])
+
+    for _ in range(int(clip.fps * clip.duration)):
+        x = loc1[1] + d_frame*fn0*(loc2[1]-loc1[1])/d_time
+        y = loc1[2] + d_frame*fn0*(loc2[2]-loc1[2])/d_time
+        z = loc1[3] + d_frame*fn0*(loc2[3]-loc1[3])/d_time
+        gps_frame.append({"altitude":z,"latitude":y,"longitude":x})
+        if ((loc1[0] + d_frame * fn0) > loc2[0]) :
+            fn0  = 0
+            loc1 = loc2
+            idx += 1
+            d_time = key_list[idx+1] - key_list[idx]
+            loc2   = get_location(gps_db, key_list[idx+1])
+
+    return gps_frame
 
 
 def region_of_interest(img, vertices):
@@ -53,7 +106,7 @@ def edgedImage(image):
 
 def pipeline(image):
     ## Crop Range
-    height, width, channel = image.shape
+    height, width, _ = image.shape
     region_of_interest_vertices = [
         (0, height),
         (width / 2, height / 2),
@@ -169,11 +222,14 @@ def pipeline(image):
 
 
     ## Draw Culculated Lines
+    analyze_judge = 0.0
     actual_line = []
     if left_x_end != 0 :
         actual_line.extend([[left_x_start,  max_y, left_x_end,  min_y]])
+        analyze_judge += 0.5
     if right_x_end != 0:
         actual_line.extend([[right_x_start, max_y, right_x_end, min_y]])
+        analyze_judge += 0.5
     line_image = draw_lines(
         line_image,
         [actual_line],
@@ -184,44 +240,68 @@ def pipeline(image):
     img_dst  = cv2.addWeighted(image, 1.0, line_image, 1.0, 0.0)
 
     ### save lined jpg image
-    global savefile_num
-    #fn="../ss2/org" + str(savefile_num) + ".jpg"
-    #mpimg.imsave(fn, image)
-    fn="../ss2/can" + str(savefile_num) + ".jpg"
-    cny_img = cv2.merge((cannyed_image,cannyed_image,cannyed_image))
-    mpimg.imsave(fn, cny_img)
-    fn="../ss2/lin" + str(savefile_num) + ".jpg"
-    print(fn)
+    global analyze_fn
+    global trip_id
+    global framed_gps
+    fn="images/" + trip_id + str(analyze_fn) + ".jpg"
     mpimg.imsave(fn,img_dst)
-    savefile_num = savefile_num + 1
+    framed_gps[analyze_fn]['image'] = fn
+    framed_gps[analyze_fn]['judge'] = analyze_judge
+    analyze_fn += 1
+    #print(fn)
     ###
     
     return img_dst
 
 
 
-#line_image = pipeline(mpimg.imread('solidWhiteCurve.jpg'))
-#plt.figure()
-#plt.imshow(line_image)
-#plt.show()
-
-
 from moviepy.editor import VideoFileClip
-from IPython.display import HTML
+#from IPython.display import HTML
 import sys
+import os
 
 argvs = sys.argv
 argc  = len(argvs)
 
-if(argc == 1):
-    input_video  = "../mv/challenge.mp4"
-    output_video = "../mv/challenge_output.mp4"
-else:
-    input_video  = argvs[1]
-    output_video = "output.mp4"
+if argc != 3:
+    print("few argments..usage: python loat_video.py id id")
+    exit(-1)
 
+private_id = argvs[1]
+trip_id    = argvs[2]
 
+# load API key from api.cfg
+config = {}
+for line in open('api.cfg','r'):
+    line = line.replace('\n','').split(',')
+    config[line[0]] = line[1]
+
+# connect firebase
+firebase = pyrebase.initialize_app(config)
+storage  = firebase.storage()
+db       = firebase.database()
+
+# get database
+detail   = db.child("trips").child(private_id).child(trip_id).get()
+gps_db   = db.child("breadcrumbs").child(private_id).get()
+
+# download video
+if not os.path.isdir('clips'):
+    os.mkdir('clips')
+input_video = trip_id+".mp4"
+storage.child("clips/" + trip_id).download("clips/" + input_video)
 clip1 = VideoFileClip(input_video)
-white_clip = clip1.fl_image(pipeline)
-white_clip.write_videofile(output_video, audio=False)
 
+# make gps timeline
+start_time = detail.val()['start']
+framed_gps = make_frame_gps(gps_db, clip1, start_time)
+
+# analyze road lane
+if not os.path.isdir('images'):
+    os.mkdir('images')
+analyze_fn = 0
+white_clip = clip1.fl_image(pipeline)
+
+
+
+#white_clip.write_videofile(output_video, audio=False)
