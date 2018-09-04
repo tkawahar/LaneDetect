@@ -88,9 +88,8 @@ def draw_lines(img, lines, color=[255, 0, 0], thickness=3):
     return img
 
 
-def edgedImage(image):
+def edgedFromFilterImage(image):
     ## Convert to grayscale and get cannyed edge here.
-    #gray_image    = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     lYellow       = np.array([130,130,40])
     uYellow       = np.array([255,255,100])
     yellow_image  = cv2.inRange(image, lYellow, uYellow)
@@ -114,9 +113,9 @@ def pipeline(image):
     ]
     
     ## Convert to grayscale and get cannyed edge here.
-    #gray_image    = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    #cannyed_image = cv2.Canny(gray_image, 100, 200)
-    cannyed_image = edgedImage(image)
+    gray_image    = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    cannyed_image = cv2.Canny(gray_image, 100, 200)
+    #cannyed_image = edgedFromFilterImage(image)
     cropped_image = region_of_interest(
         cannyed_image,
         np.array([region_of_interest_vertices], np.int32)
@@ -243,6 +242,8 @@ def pipeline(image):
     global analyze_fn
     global trip_id
     global framed_gps
+    if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
+        framed_gps.append(framed_gps[-1])
     fn="images/" + trip_id + str(analyze_fn) + ".jpg"
     mpimg.imsave(fn,img_dst)
     framed_gps[analyze_fn]['image'] = fn
@@ -264,7 +265,7 @@ argvs = sys.argv
 argc  = len(argvs)
 
 if argc != 3:
-    print("few argments..usage: python loat_video.py id id")
+    print("few argments..usage: python loat_video.py pid tid")
     exit(-1)
 
 private_id = argvs[1]
@@ -302,6 +303,9 @@ if not os.path.isdir('images'):
 analyze_fn = 0
 white_clip = clip1.fl_image(pipeline)
 
-
+## TODO: Update Database using framed_gps
+#  framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
+## TODO: Upload images to storage/images
+#  storage/images/%tid%[0-fn].jpg
 
 #white_clip.write_videofile(output_video, audio=False)
