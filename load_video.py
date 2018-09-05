@@ -309,13 +309,19 @@ except FileExistsError:
 analyze_fn = 0
 white_clip = clip1.fl_image(pipeline)
 
-## TODO: Update Database using framed_gps
-#  framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
-db.child('analyzed').push(framed_gps)
-## TODO: Upload images to storage/images
-#  storage/images/%tid%/[00000-000fn].jpg
+# triming database per 0.5 sec
+interval = int(clip1.fps / 2)
+upload_data=[]
+for i in range(int(len(framed_gps)/interval)):
+    upload_data.append(framed_gps[i*interval])
+
+
+# Update Database using framed_gps
+# framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
+db.child('analyzed/'+trip_id).set(upload_data)
+# Upload images to storage/images/%tid%/[00000-000fn].jpg
 image_list = os.listdir(image_dir)
-for imfile in image_list:
-    storage.child(image_dir + imfile).put(image_dir + imfile)
+for imfile in upload_data:
+    storage.child(imfile['image']).put(imfile['image'])
 
 #white_clip.write_videofile(output_video, audio=False)
