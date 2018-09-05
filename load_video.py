@@ -6,8 +6,9 @@ import cv2
 import math
 
 ### global values
-analyze_fn = 0
-trip_id    = ""
+analyze_itvl = 0.5
+analyze_fn   = 0
+trip_id      = ""
 
 ### functions
 # gps dbから位置情報配列を取得
@@ -35,8 +36,7 @@ def make_frame_gps(gps_db, clip, start):
     #gps_db.val()[str(key_list[e_idx])]
 
     # 線形補完
-    fps       = clip.fps  # get fps from movie file
-    d_frame   = 1000/fps  # 1 frame time in ms
+    d_frame   = 1000 * analyze_itvl #1000/clip.fps  # 1 frame time in ms
     fn0       = 0
     gps_frame = []
 
@@ -45,7 +45,7 @@ def make_frame_gps(gps_db, clip, start):
     loc1   = get_location(gps_db, key_list[idx])
     loc2   = get_location(gps_db, key_list[idx+1])
 
-    for _ in range(int(clip.fps * clip.duration)):
+    for _ in range(int(clip.duration / analyze_itvl)): ##range(int(clip.fps * clip.duration)):
         x = loc1[1] + d_frame*fn0*(loc2[1]-loc1[1])/d_time
         y = loc1[2] + d_frame*fn0*(loc2[2]-loc1[2])/d_time
         z = loc1[3] + d_frame*fn0*(loc2[3]-loc1[3])/d_time
@@ -291,7 +291,7 @@ if not os.path.isdir('clips'):
     os.mkdir('clips')
 input_video = trip_id+".mp4"
 storage.child("clips/" + trip_id).download("clips/" + input_video)
-clip1 = VideoFileClip(input_video)
+clip1 = VideoFileClip("clips/" + input_video)
 
 # make gps timeline
 start_time = detail.val()['start']
@@ -307,21 +307,17 @@ except FileExistsError:
     print('image directory is already existed. exit.')
     exit(-1)
 analyze_fn = 0
-white_clip = clip1.fl_image(pipeline)
-
-# triming database per 0.5 sec
-interval = int(clip1.fps / 2)
-upload_data=[]
-for i in range(int(len(framed_gps)/interval)):
-    upload_data.append(framed_gps[i*interval])
+#white_clip = clip1.fl_image(pipeline)
+#white_clip.write_videofile(output_video, audio=False)
+for i in range(int(clip1.duration / analyze_itvl)):
+    pipeline(clip1.get_frame( i * analyze_itvl))
 
 
 # Update Database using framed_gps
 # framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
-db.child('analyzed/'+trip_id).set(upload_data)
+db.child('analyzed/'+trip_id).set(framed_gps)
 # Upload images to storage/images/%tid%/[00000-000fn].jpg
 image_list = os.listdir(image_dir)
-for imfile in upload_data:
+for imfile in framed_gps:
     storage.child(imfile['image']).put(imfile['image'])
 
-#white_clip.write_videofile(output_video, audio=False)
