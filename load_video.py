@@ -56,6 +56,8 @@ def make_frame_gps(gps_db, clip, start):
             idx += 1
             d_time = key_list[idx+1] - key_list[idx]
             loc2   = get_location(gps_db, key_list[idx+1])
+        else:
+            fn0 += 1
 
     return gps_frame
 
@@ -298,8 +300,6 @@ start_time = detail.val()['start']
 framed_gps = make_frame_gps(gps_db, clip1, start_time)
 
 # analyze road lane
-#if not os.path.isdir('images'):
-#    os.mkdir('images')
 image_dir = 'images/' + trip_id + '/'
 try:
     os.makedirs(image_dir)
