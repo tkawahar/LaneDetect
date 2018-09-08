@@ -140,24 +140,28 @@ def pipeline(image):
     left_line_y  = []
     right_line_x = []
     right_line_y = []
-    for line in lines:
-        for x1, y1, x2, y2 in line:
-            slope = float(y2 - y1) / float(x2 - x1)
-            #print(line)
-            #print(slope)
-            if math.fabs(slope) < 0.4: #0.5: # <-- Only consider extreme slope
-                other_lines.extend([[x1,y1,x2,y2]])
-                continue
-            if slope <= 0: # <-- If the slope is negative, left group.
-                left_line_x.extend([x1, x2])
-                left_line_y.extend([y1, y2])
-                #print("left group")
-                left_lines.extend([[x1,y1,x2,y2]])
-            else: # <-- Otherwise, right group.
-                right_line_x.extend([x1, x2])
-                right_line_y.extend([y1, y2])
-                #print("right group")
-                right_lines.extend([[x1,y1,x2,y2]])
+    if not isinstance(lines, type(None)):
+        for line in lines:
+            for x1, y1, x2, y2 in line:
+                if x1 == x2:
+                    other_lines.extend([[x1,y1,x2,y2]])
+                    continue
+                slope = float(y2 - y1) / float(x2 - x1)
+                #print(line)
+                #print(slope)
+                if math.fabs(slope) < 0.4: #0.5: # <-- Only consider extreme slope
+                    other_lines.extend([[x1,y1,x2,y2]])
+                    continue
+                if slope <= 0: # <-- If the slope is negative, left group.
+                    left_line_x.extend([x1, x2])
+                    left_line_y.extend([y1, y2])
+                    #print("left group")
+                    left_lines.extend([[x1,y1,x2,y2]])
+                else: # <-- Otherwise, right group.
+                    right_line_x.extend([x1, x2])
+                    right_line_y.extend([y1, y2])
+                    #print("right group")
+                    right_lines.extend([[x1,y1,x2,y2]])
 
     #print("left_lines::", left_lines)
     #print("right_lines::", right_lines)
@@ -285,6 +289,7 @@ storage  = firebase.storage()
 db       = firebase.database()
 
 # get database
+# TODO: Insert Error Process when db is not found
 detail   = db.child("trips").child(private_id).child(trip_id).get()
 gps_db   = db.child("breadcrumbs").child(private_id).get()
 
