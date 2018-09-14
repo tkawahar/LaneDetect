@@ -245,25 +245,26 @@ def pipeline(image):
     img_dst  = cv2.addWeighted(image, 1.0, line_image, 1.0, 0.0)
 
     ### save lined jpg image
-    global analyze_fn
-    global trip_id
-    global framed_gps
-    if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
-        framed_gps.append(framed_gps[-1])
-    fn="images/" + trip_id + "/{num:05}.jpg".format(num=analyze_fn)
-    mpimg.imsave(fn,img_dst)
-    framed_gps[analyze_fn]['image'] = fn
-    framed_gps[analyze_fn]['judge'] = analyze_judge
-    analyze_fn += 1
+    # global analyze_fn
+    # global trip_id
+    # global framed_gps
+    # if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
+    #     framed_gps.append(framed_gps[-1])
+    # fn="images/" + trip_id + "/{num:05}.jpg".format(num=analyze_fn)
+    # mpimg.imsave(fn,img_dst)
+    # framed_gps[analyze_fn]['image'] = fn
+    # framed_gps[analyze_fn]['judge'] = analyze_judge
+    # analyze_fn += 1
     #print(fn)
     ###
     
-    return img_dst
+    return img_dst, analyze_judge
 
 
 
 from moviepy.editor import VideoFileClip
 #from IPython.display import HTML
+import GetVideoInfo as vi
 import sys
 import os
 
@@ -299,9 +300,11 @@ if not os.path.isdir('clips'):
 input_video = trip_id+".mp4"
 storage.child("clips/" + trip_id).download("clips/" + input_video)
 clip1 = VideoFileClip("clips/" + input_video)
+height, width, _ = clip1.get_frame(0).shape
 
 # make gps timeline
-start_time = detail.val()['start']
+#start_time = detail.val()['start']
+start_time, rotate = vi.get_time_rotate("clips/" + input_video)
 framed_gps = make_frame_gps(gps_db, clip1, start_time)
 
 # analyze road lane
@@ -315,8 +318,16 @@ analyze_fn = 0
 #white_clip = clip1.fl_image(pipeline)
 #white_clip.write_videofile(output_video, audio=False)
 for i in range(int(clip1.duration / analyze_itvl)):
-    pipeline(clip1.get_frame( i * analyze_itvl))
-
+    dst_image, judge = pipeline(clip1.get_frame( i * analyze_itvl))
+    if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
+        framed_gps.append(framed_gps[-1])
+    if rotate != 0: # if rotated, reverse height and width
+        dst_image = cv2.resize(dst_image, (height, width))
+    fn="images/" + trip_id + "/{num:05}.jpg".format(num=analyze_fn)
+    mpimg.imsave(fn, dst_image)
+    framed_gps[analyze_fn]['image'] = fn
+    framed_gps[analyze_fn]['judge'] = judge
+    analyze_fn += 1
 
 # Update Database using framed_gps
 # framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
