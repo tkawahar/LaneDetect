@@ -108,9 +108,17 @@ def edgedFromFilterImage(image):
 def pipeline(image):
     ## Crop Range
     height, width, _ = image.shape
+    """
     region_of_interest_vertices = [
         (0, height),
         (width / 2, height / 2),
+        (width, height),
+    ]
+    """
+    region_of_interest_vertices = [
+        (0, height),
+        (0, height / 2),
+        (width, height / 2),
         (width, height),
     ]
     
