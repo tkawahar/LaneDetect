@@ -6,9 +6,10 @@ import cv2
 import math
 
 ### global values
-analyze_itvl = 0.5
+analyze_itvl = 5  # sec
 analyze_fn   = 0
 trip_id      = ""
+D_HLS        = [ 1, 180, 50, 10]  # Hough Line Detect Parameter [rho,theta,minLine,maxGap]
 
 ### functions
 # gps dbから位置情報配列を取得
@@ -28,36 +29,38 @@ def make_frame_gps(gps_db, clip, start):
 
     # startに一番近いキーを探す (startの次)　https://qiita.com/icchi_h/items/fc0df3abb02b51f81657
     s_idx = np.abs(np.asarray(key_list) - start).argmin()
-    if start > key_list[s_idx]:
-        s_idx += 1
-        
+    #if start > key_list[s_idx]:
+    #    s_idx += 1
+    if start < key_list[s_idx]:
+        s_idx -= 1
+
     # DBの中身
     gps_db.val()[str(key_list[s_idx])]
     #gps_db.val()[str(key_list[e_idx])]
 
     # 線形補完
-    d_frame   = 1000 * analyze_itvl #1000/clip.fps  # 1 frame time in ms
-    fn0       = 0
+    #d_frame   = 1000 * analyze_itvl #1000/clip.fps  # 1 frame time in ms
+    #fn0       = 0
     gps_frame = []
 
     idx    = s_idx
     d_time = key_list[idx+1] - key_list[idx] # duration time between gps breadcrumbs
     loc1   = get_location(gps_db, key_list[idx])
     loc2   = get_location(gps_db, key_list[idx+1])
+    c_time = start
 
     for _ in range(int(clip.duration / analyze_itvl)): ##range(int(clip.fps * clip.duration)):
-        x = loc1[1] + d_frame*fn0*(loc2[1]-loc1[1])/d_time
-        y = loc1[2] + d_frame*fn0*(loc2[2]-loc1[2])/d_time
-        z = loc1[3] + d_frame*fn0*(loc2[3]-loc1[3])/d_time
+        x = loc1[1] + (loc2[1]-loc1[1]) * (c_time-loc1[0]) / d_time
+        y = loc1[2] + (loc2[2]-loc1[2]) * (c_time-loc1[0]) / d_time
+        z = loc1[3] + (loc2[3]-loc1[3]) * (c_time-loc1[0]) / d_time
         gps_frame.append({"altitude":z,"latitude":y,"longitude":x})
-        if ((loc1[0] + d_frame * fn0) > loc2[0]) :
-            fn0  = 0
-            loc1 = loc2
-            idx += 1
+        c_time += (analyze_itvl * 1000)
+        #if (c_time > loc2[0]) :
+        while (c_time > loc2[0]) :
+            loc1   = loc2
+            idx   += 1
             d_time = key_list[idx+1] - key_list[idx]
             loc2   = get_location(gps_db, key_list[idx+1])
-        else:
-            fn0 += 1
 
     return gps_frame
 
@@ -67,10 +70,8 @@ def region_of_interest(img, vertices):
     mask = np.zeros_like(img)
     # Create a match color with the same color channel counts.
     match_mask_color = 255
-
     # Fill inside the polygon
     cv2.fillPoly(mask, vertices, match_mask_color)
-
     # Returning the image only where mask pixels match
     masked_image = cv2.bitwise_and(img, mask)
     return masked_image
@@ -90,24 +91,117 @@ def draw_lines(img, lines, color=[255, 0, 0], thickness=3):
     return img
 
 
-def edgedFromFilterImage(image):
+def filterImageRGB(image):
     ## Convert to grayscale and get cannyed edge here.
     lYellow       = np.array([130,130,40])
     uYellow       = np.array([255,255,100])
     yellow_image  = cv2.inRange(image, lYellow, uYellow)
-    lWhite        = np.array([200,200,200])
+    #lWhite        = np.array([200,200,200])
+    lWhite        = np.array([170,170,170])
     uWhite        = np.array([255,255,255])
     white_image   = cv2.inRange(image, lWhite, uWhite)
     picked_image  = cv2.bitwise_or(yellow_image, white_image)
+    return picked_image
 
-    cannyed_image = cv2.Canny(picked_image, 100, 200)
 
-    return cannyed_image
+def CreateSourceImage(image):
+    ## Pre-Processing Image
+    # Convert to grayscale and get cannyed edge here.
+    picked_image  = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    #picked_image  = filterImageRGB(image)
+    picked_image  = cv2.medianBlur(picked_image, 11) # median filter (remove noise)
+    cannyed_image = cv2.Canny(picked_image, 50, 100)
+    return picked_image, cannyed_image
+
+
+def LineDetect_Hough(image):
+    # original
+    lines = cv2.HoughLinesP(
+        image,        # cannyed_image,
+        lines=np.array([]),
+        rho=D_HLS[0], #6,
+        theta=np.pi / D_HLS[1], #100, #60,
+        threshold=80, #40, #160,
+        minLineLength=D_HLS[2], #10, #40,
+        maxLineGap=D_HLS[3] #20 #25
+    )
+    return lines
+
+
+def LineDetect(image):
+    lines = LineDetect_Hough(image)
+    #lines = LineDetect_LSD(image)
+    return lines
+
+
+class group_line:
+    line_group  = ['others',           'left',                'right']
+    g_lines     = {line_group[0]:[[]], line_group[1]:[[],[]], line_group[2]:[[],[]]} # [0]: most steep, [1]: others
+    g_line_x    = {                    line_group[1]:[[],[]], line_group[2]:[[],[]]}
+    g_line_y    = {                    line_group[1]:[[],[]], line_group[2]:[[],[]]}
+    mss         = {                    line_group[1]:0,       line_group[2]:0 }
+    left_th     = 0.5 # 5/8 side threshold
+
+    def __init__(self, lines, width):
+        # init parameters
+        for side in self.line_group:
+            if side == 'others':
+                self.g_lines[side] = [[]]
+            else:
+                self.g_lines[side]  = [[],[]]
+                self.g_line_x[side] = [[],[]]
+                self.g_line_y[side] = [[],[]]
+                self.mss[side]      = 0
+        # grouping
+        for line in lines:
+            for x1,y1,x2,y2 in line:
+
+                ## Vertical line
+                if x1 == x2:
+                    self.g_lines['others'][0].extend([[x1,y1,x2,y2]])
+                    continue
+
+                ## Oblique line
+                slope     = float(y2 - y1) / float(x2 - x1)
+                #intercept = y1 - slope * x1
+                # Except close to the horizontal line
+                if math.fabs(slope) < 0.2 or math.fabs(slope) > 1.5: #0.5: 
+                    self.g_lines['others'][0].extend([[x1,y1,x2,y2]])
+                    continue
+
+                if slope < 0:
+                    if x1 > width*self.left_th or x2 > width*self.left_th:  # left line but right zone
+                        self.g_lines['others'][0].extend([[x1,y1,x2,y2]])
+                        continue
+                    side = self.line_group[1] # 'left'
+                else:
+                    if x1 < width*(1-self.left_th) or x2 < width*(1-self.left_th):  # left line but right zone
+                        self.g_lines['others'][0].extend([[x1,y1,x2,y2]])
+                        continue
+                    side = self.line_group[2] # 'right'
+
+                cslope = int(math.fabs(slope*10))
+                if cslope > self.mss[side]:
+                    self.mss[side]          = cslope
+                    self.g_lines[side][1]  += self.g_lines[side][0]
+                    self.g_lines[side][0]   = [[x1,y1,x2,y2]]
+                    self.g_line_x[side][1] += self.g_line_x[side][0]
+                    self.g_line_y[side][1] += self.g_line_y[side][0]
+                    self.g_line_x[side][0]  = [x1, x2]
+                    self.g_line_y[side][0]  = [y1, y2]
+                elif cslope == self.mss[side]:
+                    self.g_lines[side][0]  += [[x1,y1,x2,y2]]
+                    self.g_line_x[side][0] += [x1, x2]
+                    self.g_line_y[side][0] += [y1, y2]
+                else:
+                    self.g_lines[side][1]  += [[x1,y1,x2,y2]]
+                    self.g_line_x[side][1] += [x1, x2]
+                    self.g_line_y[side][1] += [y1, y2]
 
 
 def pipeline(image):
-    ## Crop Range
-    height, width, _ = image.shape
+    ### Set Region of Interest Range
+    height, width, _ = image.shape # not rerated with rotation
     """
     region_of_interest_vertices = [
         (0, height),
@@ -121,151 +215,67 @@ def pipeline(image):
         (width, height / 2),
         (width, height),
     ]
-    
-    ## Convert to grayscale and get cannyed edge here.
-    gray_image    = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    cannyed_image = cv2.Canny(gray_image, 100, 200)
-    #cannyed_image = edgedFromFilterImage(image)
+
+    ### making base image of line detection
+    #picked_image, cannyed_image = CreateSourceImage(image)
+    _, cannyed_image = CreateSourceImage(image)
     cropped_image = region_of_interest(
         cannyed_image,
         np.array([region_of_interest_vertices], np.int32)
     )
 
-    lines = cv2.HoughLinesP(
-        cropped_image,
-        rho=6,
-        theta=np.pi / 100, #60,
-        threshold=50, #160,
-        lines=np.array([]),
-        minLineLength=20, #40,
-        maxLineGap=25
-    )
+    ### Line Detect
+    lines = LineDetect(cropped_image)
+    if isinstance(lines, type(None)):
+        return image, 0
 
-    other_lines  = []
-    left_lines   = []
-    right_lines  = []
-    left_line_x  = []
-    left_line_y  = []
-    right_line_x = []
-    right_line_y = []
-    if not isinstance(lines, type(None)):
-        for line in lines:
-            for x1, y1, x2, y2 in line:
-                if x1 == x2:
-                    other_lines.extend([[x1,y1,x2,y2]])
-                    continue
-                slope = float(y2 - y1) / float(x2 - x1)
-                #print(line)
-                #print(slope)
-                if math.fabs(slope) < 0.4: #0.5: # <-- Only consider extreme slope
-                    other_lines.extend([[x1,y1,x2,y2]])
-                    continue
-                if slope <= 0: # <-- If the slope is negative, left group.
-                    left_line_x.extend([x1, x2])
-                    left_line_y.extend([y1, y2])
-                    #print("left group")
-                    left_lines.extend([[x1,y1,x2,y2]])
-                else: # <-- Otherwise, right group.
-                    right_line_x.extend([x1, x2])
-                    right_line_y.extend([y1, y2])
-                    #print("right group")
-                    right_lines.extend([[x1,y1,x2,y2]])
+    ### Grouping Lines
+    gl = group_line(lines, width)
 
-    #print("left_lines::", left_lines)
-    #print("right_lines::", right_lines)
+    ### Drawing Lines
+    target_line = []
+    #min_y        = int(image.shape[0] * 3 / 5) # <-- Just below the horizon
+    min_y       = int(image.shape[0] * 1 / 2) # <-- Just below the horizon
+    max_y       = image.shape[0] # <-- The bottom of the image
+    # Prepare Base Image
     line_image = np.zeros(
-        (
-            image.shape[0],
-            image.shape[1],
-            3
-        ),
-        dtype=np.uint8,
+        (image.shape[0], image.shape[1], 3), dtype=np.uint8,
     )
-
-    ## Draw detected lines
-    color_o = [150,50,155]
-    color_l = [0,0,255]
-    color_r = [0,255,0]
-    line_image = draw_lines(
-        line_image,
-        [other_lines],
-        color=color_o,
-        thickness=2,
-    )
-    line_image = draw_lines(
-        line_image,
-        [left_lines],
-        color=color_l,
-        thickness=2,
-    )
-    line_image = draw_lines(
-        line_image,
-        [right_lines],
-        color=color_r,
-        thickness=2,
-    )
-
-    ## Calculate Actual lines
-    min_y = int(image.shape[0] * 3 / 5) # <-- Just below the horizon
-    max_y = image.shape[0] # <-- The bottom of the image
-
-    if left_lines != []:
-        poly_left = np.poly1d(np.polyfit(
-            left_line_y,
-            left_line_x,
-            deg=1
-        ))
-        left_x_start = int(poly_left(max_y))
-        left_x_end   = int(poly_left(min_y))
-    else:
-        left_x_start = 0
-        left_x_end   = 0
-
-    if right_lines != []:
-        poly_right = np.poly1d(np.polyfit(
-            right_line_y,
-            right_line_x,
-            deg=1
-        ))
-        right_x_start = int(poly_right(max_y))
-        right_x_end   = int(poly_right(min_y))
-    else:
-        right_x_start = 0
-        right_x_end   = 0
-
-
-    ## Draw Culculated Lines
+    # Draw Extention Lines
+    line_color = {gl.line_group[0]:[[150,50,155]],           # others
+                  gl.line_group[1]:[[0,250,255],[0,0,255]],  # left
+                  gl.line_group[2]:[[250,255,0],[0,255,0]]}  # right
+    for i in range(len(gl.line_group)):
+        side = gl.line_group[i]
+        for j in range(len(gl.g_lines[side])):
+            line_image = draw_lines(
+                line_image,
+                [gl.g_lines[side][j]],
+                color=line_color[side][j],
+                thickness=2,
+            )
+    # Calculate Target Lines
     analyze_judge = 0.0
-    actual_line = []
-    if left_x_end != 0 :
-        actual_line.extend([[left_x_start,  max_y, left_x_end,  min_y]])
-        analyze_judge += 0.5
-    if right_x_end != 0:
-        actual_line.extend([[right_x_start, max_y, right_x_end, min_y]])
-        analyze_judge += 0.5
+    calc_side = gl.line_group[1:]
+    for side in calc_side:
+        if gl.g_lines[side][0] != []:
+            new_x   = [np.mean(gl.g_line_x[side][0][::2]), np.mean(gl.g_line_x[side][0][1::2])]
+            new_y   = [np.mean(gl.g_line_y[side][0][::2]), np.mean(gl.g_line_y[side][0][1::2])]
+            poly    = np.poly1d(np.polyfit(new_y, new_x, deg=1))
+            x_start = int(poly(max_y))
+            x_end   = int(poly(min_y))
+            target_line.extend([[x_start, max_y, x_end, min_y]])
+            analyze_judge += 0.5
+    # Draw Culculated Lines
     line_image = draw_lines(
         line_image,
-        [actual_line],
+        [target_line],
         thickness=5,
     )
 
-    ## Overlay
+    ### Overlay line image
     img_dst  = cv2.addWeighted(image, 1.0, line_image, 1.0, 0.0)
 
-    ### save lined jpg image
-    # global analyze_fn
-    # global trip_id
-    # global framed_gps
-    # if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
-    #     framed_gps.append(framed_gps[-1])
-    # fn="images/" + trip_id + "/{num:05}.jpg".format(num=analyze_fn)
-    # mpimg.imsave(fn,img_dst)
-    # framed_gps[analyze_fn]['image'] = fn
-    # framed_gps[analyze_fn]['judge'] = analyze_judge
-    # analyze_fn += 1
-    #print(fn)
-    ###
-    
     return img_dst, analyze_judge
 
 
@@ -313,7 +323,7 @@ height, width, _ = clip1.get_frame(0).shape
 # make gps timeline
 #start_time = detail.val()['start']
 start_time, rotate = vi.get_time_rotate("clips/" + input_video)
-framed_gps = make_frame_gps(gps_db, clip1, start_time)
+framed_gps = make_frame_gps(gps_db, clip1, start_time*1000)
 
 # analyze road lane
 image_dir = 'images/' + trip_id + '/'
