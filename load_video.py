@@ -279,79 +279,81 @@ def pipeline(image):
     return img_dst, analyze_judge
 
 
+if __name__ == '__main__':
+    from moviepy.editor import VideoFileClip
+    #from IPython.display import HTML
+    import GetVideoInfo as vi
+    import sys
+    import os
 
-from moviepy.editor import VideoFileClip
-#from IPython.display import HTML
-import GetVideoInfo as vi
-import sys
-import os
+    argvs = sys.argv
+    argc  = len(argvs)
 
-argvs = sys.argv
-argc  = len(argvs)
+    if argc != 3:
+        print("few argments..usage: python loat_video.py pid tid")
+        exit(-1)
 
-if argc != 3:
-    print("few argments..usage: python loat_video.py pid tid")
-    exit(-1)
+    private_id = argvs[1]
+    trip_id    = argvs[2]
 
-private_id = argvs[1]
-trip_id    = argvs[2]
+    # load API key from api.cfg
+    config = {}
+    for line in open('api.cfg','r'):
+        line = line.replace('\n','').split(',')
+        config[line[0]] = line[1]
 
-# load API key from api.cfg
-config = {}
-for line in open('api.cfg','r'):
-    line = line.replace('\n','').split(',')
-    config[line[0]] = line[1]
+    # connect firebase
+    firebase = pyrebase.initialize_app(config)
+    storage  = firebase.storage()
+    db       = firebase.database()
 
-# connect firebase
-firebase = pyrebase.initialize_app(config)
-storage  = firebase.storage()
-db       = firebase.database()
+    # get database
+    # TODO: Insert Error Process when db is not found
+    detail   = db.child("trips").child(private_id).child(trip_id).get()
+    gps_db   = db.child("breadcrumbs").child(private_id).get()
 
-# get database
-# TODO: Insert Error Process when db is not found
-detail   = db.child("trips").child(private_id).child(trip_id).get()
-gps_db   = db.child("breadcrumbs").child(private_id).get()
+    # download video
+    if not os.path.isdir('clips'):
+        os.mkdir('clips')
+    input_video = trip_id+".mp4"
+    storage.child("clips/" + trip_id).download("clips/" + input_video)
+    clip1 = VideoFileClip("clips/" + input_video)
+    height, width, _ = clip1.get_frame(0).shape
 
-# download video
-if not os.path.isdir('clips'):
-    os.mkdir('clips')
-input_video = trip_id+".mp4"
-storage.child("clips/" + trip_id).download("clips/" + input_video)
-clip1 = VideoFileClip("clips/" + input_video)
-height, width, _ = clip1.get_frame(0).shape
+    # make gps timeline
+    #start_time = detail.val()['start']
+    create_time, rotate = vi.get_time_rotate("clips/" + input_video)
+    start_time = (create_time - clip1.duration) * 1000
+    framed_gps = make_frame_gps(gps_db, clip1, start_time)
 
-# make gps timeline
-#start_time = detail.val()['start']
-start_time, rotate = vi.get_time_rotate("clips/" + input_video)
-framed_gps = make_frame_gps(gps_db, clip1, start_time*1000)
+    # analyze road lane
+    image_dir = 'images/' + trip_id + '/'
+    try:
+        os.makedirs(image_dir)
+    except FileExistsError:
+        print('image directory is already existed. exit.')
+        exit(-1)
+    analyze_fn = 0
+    #white_clip = clip1.fl_image(pipeline)
+    #white_clip.write_videofile(output_video, audio=False)
+    for i in range(int(clip1.duration / analyze_itvl)):
+        dst_image, judge = pipeline(clip1.get_frame( i * analyze_itvl))
+        if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
+            framed_gps.append(framed_gps[-1])
+        if rotate != 0: # if rotated, reverse height and width
+            dst_image = cv2.resize(dst_image, (height, width))
+        fn="images/" + trip_id + "/{num:05}.jpg".format(num=analyze_fn)
+        mpimg.imsave(fn, dst_image)
+        framed_gps[analyze_fn]['image'] = fn
+        framed_gps[analyze_fn]['judge'] = judge
+        analyze_fn += 1
 
-# analyze road lane
-image_dir = 'images/' + trip_id + '/'
-try:
-    os.makedirs(image_dir)
-except FileExistsError:
-    print('image directory is already existed. exit.')
-    exit(-1)
-analyze_fn = 0
-#white_clip = clip1.fl_image(pipeline)
-#white_clip.write_videofile(output_video, audio=False)
-for i in range(int(clip1.duration / analyze_itvl)):
-    dst_image, judge = pipeline(clip1.get_frame( i * analyze_itvl))
-    if analyze_fn >= len(framed_gps) : # if out of range, copy last data to tail
-        framed_gps.append(framed_gps[-1])
-    if rotate != 0: # if rotated, reverse height and width
-        dst_image = cv2.resize(dst_image, (height, width))
-    fn="images/" + trip_id + "/{num:05}.jpg".format(num=analyze_fn)
-    mpimg.imsave(fn, dst_image)
-    framed_gps[analyze_fn]['image'] = fn
-    framed_gps[analyze_fn]['judge'] = judge
-    analyze_fn += 1
+    # Update Database using framed_gps
+    # framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
+    db.child('analyzed/'+trip_id).set(framed_gps)
 
-# Update Database using framed_gps
-# framed_gps should be {"altitude":,"latitude":,"longitude":,"image":,"judge":}
-db.child('analyzed/'+trip_id).set(framed_gps)
-# Upload images to storage/images/%tid%/[00000-000fn].jpg
-image_list = os.listdir(image_dir)
-for imfile in framed_gps:
-    storage.child(imfile['image']).put(imfile['image'])
+    # Upload images to storage/images/%tid%/[00000-000fn].jpg
+    image_list = os.listdir(image_dir)
+    for imfile in framed_gps:
+        storage.child(imfile['image']).put(imfile['image'])
 
