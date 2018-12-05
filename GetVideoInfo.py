@@ -4,8 +4,8 @@ import time
 import calendar
 import re
 
-#video_file = "../mv/MOV_0005.mp4"
-#video_file = "../mv/-LLijjSeLXgkl0-iv8rt.mp4"
+# video_file = "../mv/-LLijjSeLXgkl0-iv8rt.mp4"
+# "sudo apt-get install ffmpeg" to install ffprobe before use this script on Linux
 
 def get_time_rotate(video_file):
 
