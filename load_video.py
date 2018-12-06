@@ -142,7 +142,7 @@ class group_line:
     mss         = {                    line_group[1]:0,       line_group[2]:0 }
     left_th     = 0.5 # 5/8 side threshold
 
-    def __init__(self, lines, width):
+    def __init__(self, lines, width, height):
         # init parameters
         for side in self.line_group:
             if side == 'others':
@@ -153,19 +153,21 @@ class group_line:
                 self.g_line_y[side] = [[],[]]
                 self.mss[side]      = 0
         # grouping
+        min_slope = height/width/2 if rotate else height/width # previous: 0.2
+        max_slope = 2.5 if rotate else 5.0                     # previous: 1.5
         for line in lines:
             for x1,y1,x2,y2 in line:
 
                 ## Vertical line
                 if x1 == x2:
-                    self.g_lines['others'][0].extend([[x1,y1,x2,y2]])
+                    self.g_lines['others'][0].extend([[x1,y1,x2+1,y2]]) # W/A for debug print
                     continue
 
                 ## Oblique line
                 slope     = float(y2 - y1) / float(x2 - x1)
                 #intercept = y1 - slope * x1
                 # Except close to the horizontal line
-                if math.fabs(slope) < 0.2 or math.fabs(slope) > 1.5: #0.5: 
+                if math.fabs(slope) < min_slope or math.fabs(slope) > max_slope:
                     self.g_lines['others'][0].extend([[x1,y1,x2,y2]])
                     continue
 
@@ -175,7 +177,7 @@ class group_line:
                         continue
                     side = self.line_group[1] # 'left'
                 else:
-                    if x1 < width*(1-self.left_th) or x2 < width*(1-self.left_th):  # left line but right zone
+                    if x1 < width*(1-self.left_th) or x2 < width*(1-self.left_th):  # right line but left zone
                         self.g_lines['others'][0].extend([[x1,y1,x2,y2]])
                         continue
                     side = self.line_group[2] # 'right'
@@ -230,7 +232,7 @@ def pipeline(image):
         return image, 0
 
     ### Grouping Lines
-    gl = group_line(lines, width)
+    gl = group_line(lines, width, height)
 
     ### Drawing Lines
     target_line = []
