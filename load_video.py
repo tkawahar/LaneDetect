@@ -354,7 +354,7 @@ if __name__ == '__main__':
             framed_gps.append(framed_gps[-1])
         if rotate != 0: # if rotated, reverse height and width
             dst_image = cv2.resize(dst_image, (height, width))
-        fn=image_dir + "{num:05}.jpg".format(num=analyze_fn)
+        fn=image_dir + "{num:05}.png".format(num=analyze_fn)
         mpimg.imsave(fn, dst_image)
         framed_gps[analyze_fn]['image'] = fn
         framed_gps[analyze_fn]['judge'] = judge
