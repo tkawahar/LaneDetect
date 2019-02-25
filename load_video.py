@@ -27,6 +27,7 @@ def make_frame_gps(gps_db, clip, start):
     for key in gps_db.val().keys():
         key_list.append(int(key))
 
+    key_list.sort()
     # startに一番近いキーを探す (startの次)　https://qiita.com/icchi_h/items/fc0df3abb02b51f81657
     s_idx = np.abs(np.asarray(key_list) - start).argmin()
     #if start > key_list[s_idx]:
